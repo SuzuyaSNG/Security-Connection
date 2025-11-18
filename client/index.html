@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Secure Web Client</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .container { 
+            max-width: 600px; 
+            margin: 0 auto; 
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        .status { 
+            padding: 15px; 
+            margin: 15px 0; 
+            border-radius: 8px;
+            border-left: 4px solid;
+        }
+        .success { 
+            background-color: #d4edda; 
+            color: #155724; 
+            border-left-color: #28a745;
+        }
+        .error { 
+            background-color: #f8d7da; 
+            color: #721c24; 
+            border-left-color: #dc3545;
+        }
+        .info { 
+            background-color: #d1ecf1; 
+            color: #0c5460; 
+            border-left-color: #17a2b8;
+        }
+        .loading { 
+            background-color: #fff3cd; 
+            color: #856404; 
+            border-left-color: #ffc107;
+        }
+        button { 
+            padding: 12px 24px; 
+            margin: 10px 5px; 
+            cursor: pointer; 
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+        button:hover { background: #0056b3; }
+        button:disabled { 
+            background: #6c757d; 
+            cursor: not-allowed; 
+        }
+        input, textarea { 
+            width: 100%; 
+            padding: 12px; 
+            margin: 8px 0; 
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
+        textarea { 
+            height: 100px; 
+            resize: vertical; 
+        }
+        .hidden { display: none; }
+        .connection-status {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 10px 15px;
+            border-radius: 20px;
+            font-weight: bold;
+        }
+        .connected { background: #28a745; color: white; }
+        .disconnected { background: #dc3545; color: white; }
+        .connecting { background: #ffc107; color: black; }
+        h1 { color: #333; text-align: center; }
+        .message-log {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 5px;
+            padding: 15px;
+            margin-top: 20px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .message {
+            margin: 8px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .message.user { background: #007bff; color: white; text-align: right; }
+        .message.server { background: #28a745; color: white; }
+    </style>
+</head>
+<body>
+    <div id="connectionStatus" class="connection-status connecting">
+        Establishing Secure Connection
+    </div>
+
+    <div class="container">
+        <h1>Secure Web Client</h1>
+        
+        <div id="statusContainer">
+            <div id="status" class="status loading">
+                Initializing secure connection with the server
+            </div>
+        </div>
+        
+        <div id="mainContent" class="hidden">
+            <div>
+                <h3>Send Secure Message</h3>
+                <textarea id="message" rows="4" placeholder="Type your secure message here..."></textarea>
+                <button onclick="sendSecureMessage()" id="sendButton">Send Secure Message</button>
+            </div>
+            
+            <div class="message-log">
+                <h4>Message Log</h4>
+                <div id="messageLog"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class SecureClient { 
+            constructor() {
+                this.primedigit = null;
+                this.privateKey = null;
+                this.publicKey = null;
+                this.serverPublicKey = null;
+                this.sharedSecret = null;
+                this.derivedKeys = null;
+                this.isConnected = false;
+            }
+
+            generateKeyPair() {
+                this.privateKey = this.generatePrivateKey();
+                this.publicKey= this.modExp(BigInt(2),this.privateKey,this.primedigit);
+                return this.publicKey;
+            }
+
+            generatePrivateKey() {
+                const array = new Uint32Array(8);
+                crypto.getRandomValues(array);
+
+                let key = BigInt(0);
+                for (let i = 0; i < array.length; i++) {
+                    key = (key << BigInt(32)) + BigInt(array[i]);
+                }
+
+                key = key % (this.primedigit - BigInt(2)) + BigInt(2);
+                return key;
+            }
+            modExp(base, exponent, modulus) {
+                let result = BigInt(1);
+                base = base % modulus;
+                while (exponent > 0) {
+                    if (exponent % BigInt(2) === BigInt(1)){
+                        result = (result * base) % modulus;
+                    }
+                    exponent = exponent / BigInt(2);
+                    base = (base * base) % modulus;
+                }
+                return result;
+            }
+            computeSharedSecret(serverPublicKey) {
+                this.serverPublicKey = BigInt(serverPublicKey);
+                this.sharedSecret = this.modExp(this.serverPublicKey, this.privateKey, this.primedigit);
+                return this.sharedSecret;
+            }
+            async deriveKeys() {
+                const sharedSecretBytes = this.bigIntToBytes(this.sharedSecret);
+                
+                const encryptionKey = await this.pbkdf2(sharedSecretBytes, 'encryption');
+                const integrityKey = await this.pbkdf2(sharedSecretBytes, 'integrity');
+                
+                this.derivedKeys = {
+                    encryption: encryptionKey,
+                    integrity: integrityKey
+                };
+            }
+
+            async pbkdf2(password, salt, iterations = 100000, length = 32) {
+                // const encoder = new TextEncoder();
+                const keyMaterial = await crypto.subtle.importKey(
+                    'raw',
+                    password,
+                    'PBKDF2',
+                    false,
+                    ['deriveBits']
+                );
+                const derivedBits = await crypto.subtle.deriveBits(
+                    {
+                        name: 'PBKDF2',
+                        salt: new TextEncoder().encode(salt),
+                        iterations: iterations,
+                        hash: 'SHA-256'
+                    },
+                    keyMaterial,
+                    length * 8
+                );
+                
+                return new Uint8Array(derivedBits);
+            }
+            bigIntToBytes(bigint) {
+                let hex = bigint.toString(16);
+                if (hex.length % 2) hex = '0' + hex;
+                const bytes = new Uint8Array(hex.length / 2);
+                for (let i = 0; i < bytes.length; i++) {
+                    bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+                }
+                return bytes;
+            }
+
+            arrayToHex(array) {
+                return Array.from(array).map(b => b.toString(16).padStart(2, '0')).join('');
+            }
+            async encryptMessage(message) {
+                if (!this.derivedKeys) {
+                    throw new Error('Encryption keys not available');
+                }
+
+                const encoder = new TextEncoder();
+                const data = encoder.encode(message);
+                
+                const iv = crypto.getRandomValues(new Uint8Array(16));
+                
+                const blockSize = 16;
+                const paddingLength = blockSize - (data.length % blockSize);
+                const paddedData = new Uint8Array(data.length + paddingLength);
+                paddedData.set(data);
+                for (let i = data.length; i < paddedData.length; i++) {
+                    paddedData[i] = paddingLength;
+                }
+                const cryptoKey = await crypto.subtle.importKey(
+                    'raw',
+                    this.derivedKeys.encryption,
+                    { name: 'AES-CBC' },
+                    false,
+                    ['encrypt']
+                );
+                
+                const encrypted = await crypto.subtle.encrypt(
+                    { name: 'AES-CBC', iv: iv },
+                    cryptoKey,
+                    paddedData
+                );
+                const result = new Uint8Array(iv.length + encrypted.byteLength);
+                result.set(iv);
+                result.set(new Uint8Array(encrypted), iv.length);
+                
+                return result;
+            }
+            async decryptMessage(encryptedData) {
+                if (!this.derivedKeys) {
+                    throw new Error('Encryption keys not available');
+                }
+
+                const iv = encryptedData.slice(0, 16);
+                const ciphertext = encryptedData.slice(16);
+                
+                const cryptoKey = await crypto.subtle.importKey(
+                    'raw',
+                    this.derivedKeys.encryption,
+                    { name: 'AES-CBC' },
+                    false,
+                    ['decrypt']
+                );
+                
+                const decrypted = await crypto.subtle.decrypt(
+                    { name: 'AES-CBC', iv: iv },
+                    cryptoKey,
+                    ciphertext
+                );
+                
+                const decryptedBytes = new Uint8Array(decrypted);
+                const paddingLength = decryptedBytes[decryptedBytes.length - 1];
+                const result = decryptedBytes.slice(0, decryptedBytes.length - paddingLength);
+                
+                return new TextDecoder().decode(result);
+            }
+             async createHmac(data) {
+                if (!this.derivedKeys) {
+                    throw new Error('HMAC keys not available');
+                }
+
+                const cryptoKey = await crypto.subtle.importKey(
+                    'raw',
+                    this.derivedKeys.integrity,
+                    { name: 'HMAC', hash: 'SHA-256' },
+                    false,
+                    ['sign']
+                );
+                
+                const signature = await crypto.subtle.sign(
+                    'HMAC',
+                    cryptoKey,
+                    data
+                );
+                
+                return Array.from(new Uint8Array(signature))
+                    .map(b => b.toString(16).padStart(2, '0'))
+                    .join('');
+            }
+        }
+        const client = new SecureClient();
+        const baseUrl = window.location.origin;
+
+        function updateStatus(message, type = 'info') {
+            const statusDiv = document.getElementById('status');
+            statusDiv.innerHTML = message;
+            statusDiv.className = `status ${type}`;
+        }
+        function updateConnectionStatus(status, message) {
+            const statusElement = document.getElementById('connectionStatus');
+            statusElement.className = `connection-status ${status}`;
+            statusElement.textContent = message;
+        }
+        function addMessageToLog(message, sender = 'user') {
+            const log = document.getElementById('messageLog');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}`;
+            messageDiv.textContent = message;
+            log.appendChild(messageDiv);
+            log.scrollTop = log.scrollHeight;
+        }
+        function showMainContent() {
+            document.getElementById('mainContent').classList.remove('hidden');
+            document.getElementById('sendButton').disabled = false;
+        }
+
+        async function initializeSecureConnection() {
+            try {
+                updateConnectionStatus('connecting', 'Establishing Secure Connection...');
+                updateStatus('Step 1: Initializing secure session with server...', 'loading');
+
+                const initResponse = await fetch('/get_key', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                if (!initResponse.ok) {
+                    throw new Error('Failed to initialize session');
+                }
+
+                const initData = await initResponse.json();
+                client.primedigit = BigInt(initData.P_serv);
+                client.serverPublicKey = BigInt(initData.server_public_key);
+
+                updateStatus('Step 2: Generating client key pair...', 'loading');
+                const clientPublicKey = client.generateKeyPair();
+
+                updateStatus('Step 3: Exchanging cryptographic keys...', 'loading');
+
+                const exchangeResponse = await fetch('/dh_exchange', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        client_public: clientPublicKey.toString()
+                    })
+                });
+                if (!exchangeResponse.ok) {
+                    throw new Error('Key exchange failed');
+                }
+                const exchangeData = await exchangeResponse.json();
+
+                updateStatus('Step 4: Computing shared secret and deriving keys...', 'loading');
+
+                client.computeSharedSecret(client.serverPublicKey);
+                await client.deriveKeys();
+
+                updateStatus('Secure connection established! All communications are now encrypted and authenticated.', 'success');
+                updateConnectionStatus('connected', 'Secure Connection Established');
+                client.isConnected = true;
+
+                showMainContent();
+                addMessageToLog('Secure connection established with server. You can now send encrypted messages.', 'server');
+
+            } catch (error) {
+                console.error('Connection error:', error);
+                updateStatus(` Connection failed: ${error.message}`, 'error');
+                updateConnectionStatus('disconnected', 'Connection Failed');
+                document.getElementById('sendButton').disabled = true;
+            }
+        }
+
+        async function sendSecureMessage() {
+            if (!client.isConnected) {
+                updateStatus('Please wait for secure connection to be established', 'error');
+                return;
+            }
+
+            const messageInput = document.getElementById('message');
+            const message = messageInput.value.trim();
+
+            if (!message) {
+                updateStatus('Please enter a message to send', 'error');
+                return;
+            }
+            const sendButton = document.getElementById('sendButton');
+            sendButton.disabled = true;
+            sendButton.textContent = 'Sending...';
+
+            try {
+                addMessageToLog(message, 'user');
+                messageInput.value = '';
+
+                updateStatus('Encrypting and sending message...', 'info');
+
+                // Шифрование сообщения
+                const encryptedMessage = await client.encryptMessage(message);
+                
+                // Создание HMAC
+                const hmac = await client.createHmac(encryptedMessage);
+                
+                // Конвертация в base64
+                const encryptedB64 = btoa(String.fromCharCode(...encryptedMessage));
+
+                // Отправка на сервер
+
+                const response = await fetch('/sec_msg', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        encrypted_message: encryptedB64,
+                        hmac: hmac
+                    })
+                });
+                const responseClone = response.clone();
+                const responseText = await response.text();
+                console.log('Raw server response:', responseText);
+                
+                let data;
+                try {
+                    data = JSON.parse(responseText);
+                } catch (parseError) {
+                    console.error('JSON parse error:', parseError);
+                    throw new Error(`Server returned invalid JSON (status: ${response.status}): ${responseText}`);
+                }
+                if (!responseClone.ok) {
+                    throw new Error(data.error || `Server error: ${responseClone.status}`);
+                }
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Server error');
+                }
+
+                //const data = await response.json();
+
+                const encryptedResponse = Uint8Array.from(atob(data.encrypted_response), c => c.charCodeAt(0));
+                const decryptedResponse = await client.decryptMessage(encryptedResponse);
+                
+                addMessageToLog(decryptedResponse, 'server');
+                updateStatus(' Message sent and encrypted response received', 'success');
+
+            } catch (error) {
+                console.error('Send message error:', error);
+                updateStatus(` Error sending message: ${error.message}`, 'error');
+                addMessageToLog(`Error: ${error.message}`, 'server');
+            } finally {
+                sendButton.disabled = false;
+                sendButton.textContent = 'Send Secure Message';
+            }
+        }
+
+        document.getElementById('message').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendSecureMessage();
+            }
+        });
+
+        window.addEventListener('load', function() {
+            initializeSecureConnection();
+        });
+    </script>
+</body>
+</html>
